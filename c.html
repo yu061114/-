@@ -154,14 +154,9 @@
     <h1>🏯旧影重光·时空映像馆</h1>
     <p class="subtitle">UPLOAD · RESTORE · TRANSFORM · DISCOVER</p>
     <div class="music-badge" id="musicBadge" onclick="toggleMusic()">
-        <span>♪</span> 古筝悠扬 <span id="musicStatus">播放中</span>
+        <span>♪</span> 古筝悠扬 <span id="musicStatus">已暂停</span>
     </div>
 </div>
-
-<audio id="bgMusic" loop preload="auto" autoplay>
-    <source src="sing/王珣 - 云水禅心 (古筝).flac" type="audio/flac">
-    <source src="sing/王珣 - 云水禅心 (古筝).flac" type="audio/ogg">
-</audio>
 
 <div class="main-container">
     <div class="content-area">
@@ -300,22 +295,77 @@ let currentSeason = 'spring';
 let isRestored = false;
 let restoredImageData = null;
 
-const bgMusic = document.getElementById('bgMusic');
+// Web Audio API 古筝音乐生成
+let audioContext = null;
 let musicPlaying = false;
-bgMusic.volume = 0.25;
-bgMusic.play().then(() => { musicPlaying = true; updateMusicUI(); }).catch(() => {});
-document.addEventListener('click', function firstPlay() {
-    if (!musicPlaying) bgMusic.play().then(() => { musicPlaying = true; updateMusicUI(); });
-}, { once: true });
+let musicInterval = null;
+
+function initAudio() {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+
+function playGuZhengNote(frequency, duration, delay = 0) {
+    if (!audioContext) initAudio();
+    
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    const filterNode = audioContext.createBiquadFilter();
+    
+    oscillator.connect(filterNode);
+    filterNode.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime + delay);
+    
+    filterNode.type = 'lowpass';
+    filterNode.frequency.setValueAtTime(800, audioContext.currentTime + delay);
+    
+    gainNode.gain.setValueAtTime(0, audioContext.currentTime + delay);
+    gainNode.gain.linearRampToValueAtTime(0.08, audioContext.currentTime + delay + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + delay + duration);
+    
+    oscillator.start(audioContext.currentTime + delay);
+    oscillator.stop(audioContext.currentTime + delay + duration);
+}
+
+const guzhengNotes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88];
+let noteIndex = 0;
+
+function playBackgroundMusic() {
+    if (!musicPlaying) return;
+    
+    const note = guzhengNotes[noteIndex % guzhengNotes.length];
+    playGuZhengNote(note, 2, 0);
+    
+    noteIndex++;
+    musicInterval = setTimeout(playBackgroundMusic, 2000);
+}
+
 function toggleMusic() {
-    if (musicPlaying) { bgMusic.pause(); musicPlaying = false; }
-    else { bgMusic.play().then(() => { musicPlaying = true; }); }
+    if (musicPlaying) {
+        musicPlaying = false;
+        if (musicInterval) {
+            clearTimeout(musicInterval);
+            musicInterval = null;
+        }
+    } else {
+        musicPlaying = true;
+        playBackgroundMusic();
+    }
     updateMusicUI();
 }
+
 function updateMusicUI() {
     document.getElementById('musicBadge').classList.toggle('playing', musicPlaying);
     document.getElementById('musicStatus').innerText = musicPlaying ? '播放中' : '已暂停';
 }
+
+document.addEventListener('click', function() {
+    if (!audioContext) initAudio();
+}, { once: true });
 
 function triggerUpload() {
     document.getElementById('fileInput').click();
@@ -324,14 +374,6 @@ function triggerUpload() {
 function handleUserUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
-    // 尝试播放音乐
-    if (!musicPlaying) {
-        bgMusic.play().then(() => {
-            musicPlaying = true;
-            updateMusicUI();
-        }).catch(() => {});
-    }
     
     const reader = new FileReader();
     reader.onload = function(e) {
@@ -361,13 +403,6 @@ document.getElementById('modalOverlay').addEventListener('click', function(e) {
 
 function selectBuiltIn(index) {
     const img = builtInImages[index];
-    // 尝试播放音乐
-    if (!musicPlaying) {
-        bgMusic.play().then(() => {
-            musicPlaying = true;
-            updateMusicUI();
-        }).catch(() => {});
-    }
     
     // 使用预设的地理位置
     currentLocation = img.location;
