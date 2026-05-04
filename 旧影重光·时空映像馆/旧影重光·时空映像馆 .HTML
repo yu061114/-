@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -381,26 +382,9 @@ function selectBuiltIn(index) {
     }
     
     currentBuiltInId = img.id;
-    
-    // 将本地图片转换为base64格式，避免CORS问题
-    const tempImg = new Image();
-    tempImg.onload = function() {
-        const canvas = document.createElement('canvas');
-        canvas.width = tempImg.width;
-        canvas.height = tempImg.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(tempImg, 0, 0);
-        currentImageData = canvas.toDataURL('image/jpeg', 0.95);
-        onImageSelected(currentImageData, img.name);
-        closeLibrary();
-    };
-    tempImg.onerror = function() {
-        // 如果转换失败，直接使用原始URL
-        currentImageData = img.url;
-        onImageSelected(img.url, img.name);
-        closeLibrary();
-    };
-    tempImg.src = img.url;
+    currentImageData = img.url;
+    onImageSelected(img.url, img.name);
+    closeLibrary();
 }
 
 function onImageSelected(imageSrc, name) {
@@ -424,38 +408,63 @@ async function startRestore() {
     if (!currentImageData) return;
     const btn = document.getElementById('restoreBtn');
     btn.disabled = true; btn.textContent = '<span class="loading-spinner"></span> 修复中...';
+    
     setTimeout(() => {
-        enhanceImage(currentImageData).then(restored => {
-            restoredImageData = restored;
-            document.getElementById('afterImg').src = restored;
-            document.getElementById('afterImg').style.display='block';
-            document.getElementById('afterPlaceholder').style.display='none';
+        try {
+            // 使用CSS滤镜实现图片增强，避免Canvas CORS问题
+            const afterImg = document.getElementById('afterImg');
+            const beforeImg = document.getElementById('beforeImg');
+            
+            // 创建一个新的图片元素，应用CSS滤镜
+            afterImg.src = currentImageData;
+            afterImg.style.display = 'block';
+            afterImg.style.filter = 'brightness(1.05) contrast(1.15) saturate(1.2)';
+            afterImg.style.webkitFilter = 'brightness(1.05) contrast(1.15) saturate(1.2)';
+            
+            document.getElementById('afterPlaceholder').style.display = 'none';
             isRestored = true;
+            restoredImageData = currentImageData; // 保存原始图片
             btn.textContent = '✅ 修复完成';
-        });
+        } catch (error) {
+            console.error('Restore error:', error);
+            btn.textContent = '❌ 修复失败';
+            setTimeout(() => { btn.disabled = false; btn.textContent = '🎨 AI修复画质'; }, 2000);
+        }
     }, 1500);
 }
 
 function enhanceImage(src) {
     return new Promise(resolve => {
-        const img = new Image(); img.crossOrigin = 'anonymous';
+        const img = new Image();
         img.onload = () => {
             const canvas = document.createElement('canvas');
             const scale = Math.min(1, 1200 / img.width);
             canvas.width = img.width * scale; canvas.height = img.height * scale;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const d = imageData.data;
-            for (let i = 0; i < d.length; i += 4) {
-                d[i] = Math.min(255, d[i] * 1.05 + 10);
-                d[i+1] = Math.min(255, d[i+1] * 1.05 + 10);
-                d[i+2] = Math.min(255, d[i+2] * 1.05 + 10);
+            
+            // 尝试颜色增强，如果失败则跳过（CORS问题）
+            try {
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const d = imageData.data;
+                for (let i = 0; i < d.length; i += 4) {
+                    d[i] = Math.min(255, d[i] * 1.05 + 10);
+                    d[i+1] = Math.min(255, d[i+1] * 1.05 + 10);
+                    d[i+2] = Math.min(255, d[i+2] * 1.05 + 10);
+                }
+                ctx.putImageData(imageData, 0, 0);
+                ctx.filter = 'contrast(1.15) saturate(1.2)';
+                ctx.drawImage(canvas, 0, 0);
+            } catch (error) {
+                // CORS问题，跳过颜色增强
+                console.log('CORS issue, skipping color enhancement');
             }
-            ctx.putImageData(imageData, 0, 0);
-            ctx.filter = 'contrast(1.15) saturate(1.2)';
-            ctx.drawImage(canvas, 0, 0);
+            
             resolve(canvas.toDataURL('image/jpeg', 0.95));
+        };
+        img.onerror = () => {
+            // 如果加载失败，返回原始图片
+            resolve(src);
         };
         img.src = src;
     });
@@ -675,26 +684,34 @@ async function initChat(name) {
     }
     
     try {
-        let imageUrl = currentImageData;
-        if (currentImageData.startsWith('data:')) {
-            imageUrl = currentImageData;
-        } else if (currentImageData.startsWith('image/')) {
-            // 对于本地图片，转换为base64
-            try {
-                imageUrl = await urlToBase64(currentImageData);
-                console.log('Converted local image to base64 for chat:', imageUrl.substring(0, 100) + '...');
-            } catch (convertError) {
-                console.error('Error converting local image to base64:', convertError);
-                // 转换失败时使用原始URL
+        // 对于内置图片，不发送图片给API（避免CORS问题）
+        if (currentBuiltInId) {
+            console.log('Using text-only mode for built-in image');
+            const reply = await callChatAPI(`请专业分析${name}，包括年代、构造、特色。${currentLocation ? `该建筑位于${currentLocation}` : ''}`);
+            chat.lastChild.remove();
+            addMessage('ai', reply);
+        } else {
+            // 对于上传图片，发送图片给API
+            let imageUrl = currentImageData;
+            if (currentImageData.startsWith('data:')) {
+                imageUrl = currentImageData;
+            } else if (currentImageData.startsWith('image/')) {
+                // 对于本地图片，转换为base64（上传图片不会进入这里）
+                try {
+                    imageUrl = await urlToBase64(currentImageData);
+                    console.log('Converted local image to base64 for chat:', imageUrl.substring(0, 100) + '...');
+                } catch (convertError) {
+                    console.error('Error converting local image to base64:', convertError);
+                }
             }
+            
+            console.log('Calling chat API with image:', imageUrl);
+            const reply = await callChatAPI(`请专业分析这张古建筑图片，包括年代、构造、特色。${currentLocation ? `该建筑位于${currentLocation}` : ''}`, imageUrl);
+            console.log('API reply:', reply);
+            
+            chat.lastChild.remove();
+            addMessage('ai', reply);
         }
-        
-        console.log('Calling chat API with image:', imageUrl);
-        const reply = await callChatAPI(`请专业分析这张古建筑图片，包括年代、构造、特色。${currentLocation ? `该建筑位于${currentLocation}` : ''}`, imageUrl);
-        console.log('API reply:', reply);
-        
-        chat.lastChild.remove();
-        addMessage('ai', reply);
     } catch (error) {
         console.error('Init chat error:', error);
         addMessage('ai', getLocalInfo(name));
